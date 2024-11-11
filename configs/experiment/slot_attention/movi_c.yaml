@@ -7,13 +7,15 @@ defaults:
   - _self_
 
 trainer:
-  devices: 8
+  # devices: 8
+  devices: 1
   max_steps: 500000
   max_epochs:
   gradient_clip_val: 1.0
 
 dataset:
-  num_workers: 4
+  num_workers: 12
+  # num_workers: 0
   batch_size: 8
 
 models:

@@ -314,6 +314,7 @@ def unsupervised_mask_iou(
     n_gt_classes = len(true_mask)
     pred_mask = pred_mask.unsqueeze(1).to(torch.bool)
     true_mask = true_mask.unsqueeze(0).to(torch.bool)
+    device = true_mask.device
 
     intersection = torch.sum(pred_mask & true_mask, dim=-1).to(torch.float64)
     union = torch.sum(pred_mask | true_mask, dim=-1).to(torch.float64)
@@ -330,8 +331,9 @@ def unsupervised_mask_iou(
         true_idxs = torch.as_tensor(true_idxs, dtype=torch.int64, device=pairwise_iou.device)
     elif matching == "best_overlap":
         non_empty_gt = torch.sum(true_mask.squeeze(0), dim=1) > 0
-        pred_idxs = torch.argmax(pairwise_iou, dim=0)[non_empty_gt]
-        true_idxs = torch.arange(pairwise_iou.shape[1])[non_empty_gt]
+        # device = non_empty_gt.device
+        pred_idxs = torch.argmax(pairwise_iou, dim=0).to(device)[non_empty_gt]
+        true_idxs = torch.arange(pairwise_iou.shape[1]).to(device)[non_empty_gt]
     else:
         raise ValueError(f"Unknown matching {matching}")
 
