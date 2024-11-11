@@ -87,16 +87,25 @@ def build_and_register_datamodule_from_config(
 def build_model_from_config(
     config: TrainingConfig,
     checkpoint_path: Optional[str] = None,
+    only_model: bool = False,
 ) -> pl.LightningModule:
     models = hydra_zen.instantiate(config.models, _convert_="all")
-    optimizers = hydra_zen.instantiate(config.optimizers, _convert_="all")
     losses = hydra_zen.instantiate(config.losses, _convert_="all")
-    visualizations = hydra_zen.instantiate(config.visualizations, _convert_="all")
+    if only_model:
+        optimizers = None
+        # losses = None
+        visualizations = None
+        training_metrics = None
+        evaluation_metrics = None
+        train_vis_freq = None
+    else:
+        optimizers = hydra_zen.instantiate(config.optimizers, _convert_="all")
+        visualizations = hydra_zen.instantiate(config.visualizations, _convert_="all")
 
-    training_metrics = hydra_zen.instantiate(config.training_metrics)
-    evaluation_metrics = hydra_zen.instantiate(config.evaluation_metrics)
+        training_metrics = hydra_zen.instantiate(config.training_metrics)
+        evaluation_metrics = hydra_zen.instantiate(config.evaluation_metrics)
 
-    train_vis_freq = config.training_vis_frequency if config.training_vis_frequency else 100
+        train_vis_freq = config.training_vis_frequency if config.training_vis_frequency else 100
 
     if checkpoint_path is None:
         model = CombinedModel(

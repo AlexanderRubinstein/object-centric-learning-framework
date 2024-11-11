@@ -1,0 +1,255 @@
+# @package _global_
+# ViT feature reconstruction on MOVI-C using an autoregressive decoder (SLATE style)
+defaults:
+  # - /experiment/projects/bridging/dinosaur/_base_feature_recon
+  # - /home/oh/arubinstein17/github/object-centric-learning-framework/configs/experiment/projects/bridging/dinosaur/_base_feature_recon.yaml
+  # - /dataset: movi_c_image
+  # - /experiment/projects/bridging/dinosaur/_preprocessing_movi_dino_feature_recon
+  # - /experiment/projects/bridging/dinosaur/_metrics_clevr_patch
+  - _self_
+
+# experiment, models/perceptual_groupping, part of object_decoder etc
+# are copied from: /home/oh/arubinstein17/github/object-centric-learning-framework/configs/experiment/projects/bridging/dinosaur/_base_feature_recon.yaml
+experiment:
+  input_feature_dim: 384
+
+# The following parameters assume training on 8 GPUs, leading to an effective batch size of 64.
+trainer:
+  # devices: 8
+  devices: 1
+  # max_steps: 500000
+  max_steps: 100
+  max_epochs:
+
+dataset:
+  num_workers: 4
+  batch_size: 8
+  eval_batch_size: 8
+
+# dataset:
+# copy from: /home/oh/arubinstein17/github/object-centric-learning-framework/configs/experiment/projects/bridging/dinosaur/_preprocessing_movi_dino_feature_recon.yaml
+  train_transforms:
+    03_preprocessing:
+      _target_: ocl.transforms.SimpleTransform
+      transforms:
+        image:
+          _target_: torchvision.transforms.Compose
+          transforms:
+            - _target_: torchvision.transforms.ToTensor
+            - _target_: torchvision.transforms.Resize
+              size: 224
+              interpolation: ${torchvision_interpolation_mode:BICUBIC}
+            - "${lambda_fn:'lambda image: image.clamp(0.0, 1.0)'}" # Bicubic interpolation can get out of range
+            - _target_: torchvision.transforms.Normalize
+              mean: [0.485, 0.456, 0.406]
+              std: [0.229, 0.224, 0.225]
+      batch_transform: false
+  eval_transforms:
+    03_preprocessing:
+      _target_: ocl.transforms.SimpleTransform
+      transforms:
+        image:
+          _target_: torchvision.transforms.Compose
+          transforms:
+            - _target_: torchvision.transforms.ToTensor
+            - _target_: torchvision.transforms.Resize
+              size: 224
+              interpolation: ${torchvision_interpolation_mode:BICUBIC}
+            - "${lambda_fn:'lambda image: image.clamp(0.0, 1.0)'}" # Bicubic interpolation can get out of range
+            - _target_: torchvision.transforms.Normalize
+              mean: [0.485, 0.456, 0.406]
+              std: [0.229, 0.224, 0.225]
+        mask:
+          _target_: torchvision.transforms.Compose
+          transforms:
+            - _target_: ocl.preprocessing.MultiMaskToTensor
+            - _target_: ocl.preprocessing.ResizeNearestExact
+              size: 128
+      batch_transform: false
+
+seed: 0
+
+models:
+  feature_extractor:
+    _target_: routed.ocl.feature_extractors.TimmFeatureExtractor
+    model_name: vit_small_patch16_224_dino
+    pretrained: false
+    freeze: true
+    feature_level: 12
+
+    video_path: input.image
+
+  conditioning:
+    _target_: routed.ocl.conditioning.RandomConditioning
+    n_slots: 11
+    object_dim: 128
+
+    batch_size_path: input.batch_size
+
+  perceptual_grouping:
+    _target_: routed.ocl.perceptual_grouping.SlotAttentionGrouping
+    feature_dim: ${.object_dim}
+    object_dim: ${models.conditioning.object_dim}
+    use_projection_bias: false
+    positional_embedding:
+      _target_: ocl.neural_networks.wrappers.Sequential
+      _args_:
+        - _target_: ocl.neural_networks.positional_embedding.DummyPositionEmbed
+        - _target_: ocl.neural_networks.build_two_layer_mlp
+          input_dim: ${experiment.input_feature_dim}
+          output_dim: ${....feature_dim}
+          hidden_dim: ${experiment.input_feature_dim}
+          initial_layer_norm: true
+    ff_mlp:
+      _target_: ocl.neural_networks.build_two_layer_mlp
+      input_dim: ${..object_dim}
+      output_dim: ${..object_dim}
+      hidden_dim: "${eval_lambda:'lambda dim: 4 * dim', ${..object_dim}}"
+      initial_layer_norm: true
+      residual: true
+
+    feature_path: feature_extractor
+    conditioning_path: conditioning
+
+  object_decoder:
+    _target_: routed.ocl.decoding.AutoregressivePatchDecoder
+    # ### Added to allow evaluation running
+    # object_dim: 128 # ${models.conditioning.object_dim}
+    # output_dim: 4 # ${experiment.input_feature_dim}
+    # num_patches: 196
+    # object_dim: ${models.perceptual_grouping.object_dim}
+    # output_dim: ${experiment.input_feature_dim}
+    # num_patches: 196
+    object_dim: ${models.perceptual_grouping.object_dim}
+    output_dim: ${experiment.input_feature_dim}
+    num_patches: 196
+    object_features_path: perceptual_grouping.objects
+    target_path: feature_extractor.features
+    image_path: input.image
+    # ###
+    decoder_cond_dim: 384
+    use_input_transform: true
+    decoder:
+      _target_: ocl.neural_networks.build_transformer_decoder
+      _partial_: true
+      n_layers: 4
+      n_heads: 4
+    masks_path: perceptual_grouping.feature_attributions
+
+  masks_as_image:
+    _target_: routed.ocl.utils.resizing.Resize
+    input_path: object_decoder.masks
+    size: 128
+    resize_mode: bilinear
+    patch_mode: true
+
+
+#### Copied from: /home/oh/arubinstein17/github/object-centric-learning-framework/configs/experiment/projects/bridging/dinosaur/_base_feature_recon.yaml
+
+# losses:
+#   mse:
+#     _target_: routed.ocl.losses.ReconstructionLoss
+#     loss_type: mse
+#     input_path: object_decoder.reconstruction
+#     target_path: object_decoder.target  # Object decoder does some resizing.
+
+# visualizations:
+#   input:
+#     _target_: routed.ocl.visualizations.Image
+#     denormalization:
+#       _target_: ocl.preprocessing.Denormalize
+#       mean: [0.485, 0.456, 0.406]
+#       std: [0.229, 0.224, 0.225]
+#     image_path: input.image
+#   masks:
+#     _target_: routed.ocl.visualizations.Mask
+#     mask_path: object_decoder.masks_as_image
+#   pred_segmentation:
+#     _target_: routed.ocl.visualizations.Segmentation
+#     denormalization:
+#       _target_: ocl.preprocessing.Denormalize
+#       mean: [0.485, 0.456, 0.406]
+#       std: [0.229, 0.224, 0.225]
+#     image_path: input.image
+#     mask_path: object_decoder.masks_as_image
+# optimizers:
+#   opt0:
+#     _target_: ocl.optimization.OptimizationWrapper
+#     optimizer:
+#       _target_: torch.optim.Adam
+#       _partial_: true
+#       lr: 0.0004
+#     lr_scheduler:
+#       _target_: ocl.scheduling.exponential_decay_after_optional_warmup
+#       _partial_: true
+#       decay_rate: 0.5
+#       decay_steps: 100000
+#       warmup_steps: 10000
+
+# # copied from: /home/oh/arubinstein17/github/object-centric-learning-framework/docs/tutorial/experiments.md
+# training_metrics:
+#   classification_accuracy:
+#     # _target_: routed.torchmetrics.BinaryAccuracy
+#     _target_: routed.torchmetrics.Accuracy
+#     preds_path: my_model.prediction
+#     target_path: inputs.target
+
+
+# can't load defaults when running from eval.py
+# copied from: /home/oh/arubinstein17/github/object-centric-learning-framework/configs/experiment/projects/bridging/dinosaur/_base_feature_recon.yaml
+
+# models:
+
+
+  # conditioning:
+
+
+
+  # comment out to avoid duplicate entries
+  # object_decoder:
+  #   object_dim: ${models.perceptual_grouping.object_dim}
+  #   output_dim: ${experiment.input_feature_dim}
+  #   num_patches: 196
+  #   object_features_path: perceptual_grouping.objects
+  #   target_path: feature_extractor.features
+  #   image_path: input.image
+
+losses:
+  mse:
+    _target_: routed.ocl.losses.ReconstructionLoss
+    loss_type: mse
+    input_path: object_decoder.reconstruction
+    target_path: object_decoder.target  # Object decoder does some resizing.
+
+visualizations:
+  input:
+    _target_: routed.ocl.visualizations.Image
+    denormalization:
+      _target_: ocl.preprocessing.Denormalize
+      mean: [0.485, 0.456, 0.406]
+      std: [0.229, 0.224, 0.225]
+    image_path: input.image
+  masks:
+    _target_: routed.ocl.visualizations.Mask
+    mask_path: object_decoder.masks_as_image
+  pred_segmentation:
+    _target_: routed.ocl.visualizations.Segmentation
+    denormalization:
+      _target_: ocl.preprocessing.Denormalize
+      mean: [0.485, 0.456, 0.406]
+      std: [0.229, 0.224, 0.225]
+    image_path: input.image
+    mask_path: object_decoder.masks_as_image
+optimizers:
+  opt0:
+    _target_: ocl.optimization.OptimizationWrapper
+    optimizer:
+      _target_: torch.optim.Adam
+      _partial_: true
+      lr: 0.0004
+    lr_scheduler:
+      _target_: ocl.scheduling.exponential_decay_after_optional_warmup
+      _partial_: true
+      decay_rate: 0.5
+      decay_steps: 100000
+      warmup_steps: 10000

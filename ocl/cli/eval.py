@@ -12,6 +12,7 @@ import hydra
 import hydra_zen
 import pytorch_lightning as pl
 import torch
+from omegaconf import SI
 
 import ocl.cli._config  # noqa: F401
 from ocl.cli import cli_utils, eval_utils, train
@@ -20,16 +21,26 @@ logger = logging.getLogger("eval")
 
 
 # --8<-- [start:EvaluationConfig]
+# Convert dict of callbacks in experiment to list for use with PTL.
+CALLBACK_INTERPOLATION = SI("${oc.dict.values:experiment.callbacks}")
+
+TrainerConf = hydra_zen.builds(
+    pl.Trainer, callbacks=CALLBACK_INTERPOLATION, zen_partial=False, populate_full_signature=True
+)
+
 @dataclasses.dataclass
 class EvaluationConfig:
     """Configuration for evaluation."""
 
     # Path to training configuration file or configuration dir. If dir, train_config_name
     # needs to be set as well.
-    train_config_path: str
+    # train_config_path: str = "/home/oh/arubinstein17/github/object-centric-learning-framework/configs/experiment/projects/bridging/dinosaur/movi_c_feat_rec_auto.yaml"
+    train_config_path: str = "/home/oh/arubinstein17/github/object-centric-learning-framework/configs/experiment/projects/bridging/dinosaur"
+    # /home/oh/arubinstein17/github/object-centric-learning-framework/configs/experiment/projects/bridging/dinosaur/movi_c_feat_rec_auto.yaml
     train_config_overrides: Optional[List[str]] = None
-    train_config_name: Optional[str] = None
-    checkpoint_path: Optional[str] = None
+    train_config_name: Optional[str] = "movi_c_feat_rec_auto_for_eval"
+    # checkpoint_path: Optional[str] = None
+    checkpoint_path: Optional[str] = "/home/oh/arubinstein17/github/object-centric-learning-framework/outputs/projects/bridging/dinosaur/movi_c_feat_rec_auto/2024-11-11_19-32-13/lightning_logs/version_0/checkpoints/epoch=0-step=100.ckpt"
     output_dir: Optional[str] = None
     report_filename: str = "metrics.json"
 
@@ -50,6 +61,10 @@ class EvaluationConfig:
     eval_val: bool = True
     eval_test: bool = False
     eval_batch_size: Optional[int] = None
+
+    seed = 0
+
+    trainer: TrainerConf = dataclasses.field(default_factory=lambda: TrainerConf())
 
 
 # --8<-- [end:EvaluationConfig]
@@ -98,7 +113,8 @@ def evaluate(config: EvaluationConfig):
             raise ValueError(f"Checkpoint at {config.checkpoint_path} does not exist.")
 
     if config.output_dir is None:
-        config.output_dir = run_dir
+        # config.output_dir = run_dir
+        config.output_dir = "/home/oh/arubinstein17/github/object-centric-learning-framework/outputs/hardcoded_output_dir"
         if not os.path.exists(config.output_dir):
             os.mkdir(config.output_dir)
         logger.info(f"Using {config.output_dir} as output directory.")
@@ -109,7 +125,7 @@ def evaluate(config: EvaluationConfig):
         train_config = hydra.compose(os.path.splitext(config_name)[0], overrides=overrides)
         train_config.dataset.eval_batch_size = config.eval_batch_size
 
-        datamodule, model = eval_utils.build_from_train_config(train_config, config.checkpoint_path)
+        datamodule, model = eval_utils.build_from_train_config(train_config, config.checkpoint_path, only_model=True)
 
     if config.modules is not None:
         modules = hydra_zen.instantiate(config.modules, _convert_="all")
@@ -147,7 +163,8 @@ def evaluate(config: EvaluationConfig):
         limit = None
 
     trainer: pl.Trainer = hydra_zen.instantiate(
-        train_config.trainer,
+        # train_config.trainer,
+        config.trainer,
         _convert_="all",
         devices=1,
         callbacks=callbacks,

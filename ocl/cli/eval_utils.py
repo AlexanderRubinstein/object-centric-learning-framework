@@ -12,13 +12,13 @@ from ocl.utils.trees import get_tree_element
 
 
 def build_from_train_config(
-    config: train.TrainingConfig, checkpoint_path: Optional[str], seed: bool = True
+    config: train.TrainingConfig, checkpoint_path: Optional[str], seed: bool = True, only_model: bool = False
 ):
     if seed:
         pl.seed_everything(config.seed, workers=True)
 
     datamodule = train.build_and_register_datamodule_from_config(config)
-    model = train.build_model_from_config(config, checkpoint_path)
+    model = train.build_model_from_config(config, checkpoint_path, only_model=only_model)
 
     return datamodule, model
 
