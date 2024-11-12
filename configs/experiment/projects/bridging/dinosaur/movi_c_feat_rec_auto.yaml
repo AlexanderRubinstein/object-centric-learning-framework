@@ -11,8 +11,8 @@ defaults:
 trainer:
   # devices: 8
   devices: 1
-  # max_steps: 500000
-  max_steps: 100
+  max_steps: 500000
+  # max_steps: 100
   max_epochs:
 
 dataset:

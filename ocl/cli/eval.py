@@ -20,6 +20,9 @@ from ocl.cli import cli_utils, eval_utils, train
 logger = logging.getLogger("eval")
 
 
+SHORT_EVAL = False # debug
+
+
 # --8<-- [start:EvaluationConfig]
 # Convert dict of callbacks in experiment to list for use with PTL.
 CALLBACK_INTERPOLATION = SI("${oc.dict.values:experiment.callbacks}")
@@ -34,13 +37,18 @@ class EvaluationConfig:
 
     # Path to training configuration file or configuration dir. If dir, train_config_name
     # needs to be set as well.
-    # train_config_path: str = "/home/oh/arubinstein17/github/object-centric-learning-framework/configs/experiment/projects/bridging/dinosaur/movi_c_feat_rec_auto.yaml"
-    train_config_path: str = "/home/oh/arubinstein17/github/object-centric-learning-framework/configs/experiment/projects/bridging/dinosaur"
+    # train_config_path: str = "/home/oh/arubinstein17/github/object-centric-learning-framework/configs/experiment/projects/bridging/dinosaur/movi_c_feat_rec_auto_for_eval.yaml"
+    train_config_path: str = "/home/oh/arubinstein17/github/object-centric-learning-framework/configs/experiment/projects/bridging/dinosaur/movi_c_entity_seg.yaml"
+
+    # train_config_path: str = "/home/oh/arubinstein17/github/object-centric-learning-framework/configs/experiment/projects/bridging/dinosaur"
+    # train_config_path: str = ""
     # /home/oh/arubinstein17/github/object-centric-learning-framework/configs/experiment/projects/bridging/dinosaur/movi_c_feat_rec_auto.yaml
     train_config_overrides: Optional[List[str]] = None
-    train_config_name: Optional[str] = "movi_c_feat_rec_auto_for_eval"
-    # checkpoint_path: Optional[str] = None
-    checkpoint_path: Optional[str] = "/home/oh/arubinstein17/github/object-centric-learning-framework/outputs/projects/bridging/dinosaur/movi_c_feat_rec_auto/2024-11-11_19-32-13/lightning_logs/version_0/checkpoints/epoch=0-step=100.ckpt"
+    # train_config_name: Optional[str] = "movi_c_feat_rec_auto_for_eval"
+    train_config_name: Optional[str] = None
+    checkpoint_path: Optional[str] = None
+    # checkpoint_path: Optional[str] = "/home/oh/arubinstein17/github/object-centric-learning-framework/outputs/projects/bridging/dinosaur/movi_c_feat_rec_auto/2024-11-11_19-32-13/lightning_logs/version_0/checkpoints/epoch=0-step=100.ckpt"
+
     output_dir: Optional[str] = None
     report_filename: str = "metrics.json"
 
@@ -63,6 +71,8 @@ class EvaluationConfig:
     eval_batch_size: Optional[int] = None
 
     seed = 0
+
+    # short_eval = None # debug
 
     trainer: TrainerConf = dataclasses.field(default_factory=lambda: TrainerConf())
 
@@ -87,6 +97,86 @@ def report_from_results(metrics: Dict[str, Any], config: EvaluationConfig):
 def evaluate(config: EvaluationConfig):
     os.environ["WDS_EPOCH"] = str(0)
 
+    short_eval = SHORT_EVAL # config.short_eval
+
+    if short_eval:
+        print("Short eval")
+        # trainer = pl.Trainer()
+        config.train_config_path = hydra.utils.to_absolute_path(config.train_config_path)
+        if config.train_config_path.endswith(".yaml"):
+            config_dir, config_name = os.path.split(config.train_config_path)
+        else:
+            config_dir, config_name = config.train_config_path, config.train_config_name
+        hydra.core.global_hydra.GlobalHydra.instance().clear()
+        with hydra.initialize_config_dir(config_dir=config_dir):
+            overrides = config.train_config_overrides if config.train_config_overrides else []
+            train_config = hydra.compose(os.path.splitext(config_name)[0], overrides=overrides)
+            train_config.dataset.eval_batch_size = config.eval_batch_size
+
+            _, model = eval_utils.build_from_train_config(train_config, config.checkpoint_path, only_model=True)
+        if config.checkpoint_path is None:
+            try:
+                run_dir = os.path.dirname(config_dir)
+                checkpoint_path = cli_utils.find_checkpoint(run_dir)
+                config.checkpoint_path = checkpoint_path
+                logger.info(f"Automatically derived checkpoint path: {checkpoint_path}")
+            except (TypeError, IndexError):
+                raise ValueError(
+                    "Unable to automatically derive checkpoint from command line provided config file "
+                    "path. You can manually specify a checkpoint using the `checkpoint_path` argument."
+                )
+        else:
+            config.checkpoint_path = hydra.utils.to_absolute_path(config.checkpoint_path)
+            if not os.path.exists(config.checkpoint_path):
+                raise ValueError(f"Checkpoint at {config.checkpoint_path} does not exist.")
+
+        if config.modules is not None:
+            modules = hydra_zen.instantiate(config.modules, _convert_="all")
+            for key, module in modules.items():
+                model.models[key] = module
+
+        if config.dataset is not None:
+            datamodule = train.build_and_register_datamodule_from_config(
+                config,
+                batch_size=train_config.dataset.batch_size,
+                eval_batch_size=config.eval_batch_size,
+            )
+        if config.evaluation_metrics is not None:
+            model.evaluation_metrics = torch.nn.ModuleDict(
+                hydra_zen.instantiate(config.evaluation_metrics)
+            )
+        if config.save_outputs:
+            if config.outputs_to_store is None:
+                raise ValueError("Need to specify which outputs to store using `outputs_to_store`")
+            data_extractor = eval_utils.ExtractDataFromPredictions(
+                config.outputs_to_store, max_samples=config.n_samples_to_store, flatten_batches=True
+            )
+            callbacks = [data_extractor]
+            model.return_outputs_on_validation = True
+        else:
+            callbacks = None
+
+        if config.n_samples_to_store is not None:
+            limit = int(math.ceil(config.n_samples_to_store // config.eval_batch_size))
+        else:
+            limit = None
+        trainer: pl.Trainer = hydra_zen.instantiate(
+            config.trainer,
+            _convert_="all",
+            devices=1,
+            callbacks=callbacks,
+            logger=False,
+            enable_progress_bar=True,
+            limit_val_batches=limit,
+        )
+        metrics = {}
+        trainer.validate(model, datamodule.val_dataloader())
+        metrics["val"] = {
+            key.replace("val/", ""): float(value) for key, value in trainer.logged_metrics.items()
+        }
+        print("Metrics:", metrics)
+        return
+
     config.train_config_path = hydra.utils.to_absolute_path(config.train_config_path)
     if config.train_config_path.endswith(".yaml"):
         config_dir, config_name = os.path.split(config.train_config_path)
@@ -103,7 +193,11 @@ def evaluate(config: EvaluationConfig):
             config.checkpoint_path = checkpoint_path
             logger.info(f"Automatically derived checkpoint path: {checkpoint_path}")
         except (TypeError, IndexError):
-            raise ValueError(
+            # raise ValueError(
+            #     "Unable to automatically derive checkpoint from command line provided config file "
+            #     "path. You can manually specify a checkpoint using the `checkpoint_path` argument."
+            # )
+            print(
                 "Unable to automatically derive checkpoint from command line provided config file "
                 "path. You can manually specify a checkpoint using the `checkpoint_path` argument."
             )
