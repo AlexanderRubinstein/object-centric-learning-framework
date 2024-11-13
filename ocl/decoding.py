@@ -907,11 +907,50 @@ class EntitySegDecoder(nn.Module):
             confidence_threshold=CONF_THRESHOLD
         )
 
+        # self.augs = transforms_help[0]
+        # self.crop_augs = transforms_help[1]
+
     def forward(self, image):
         # logits = self.decoder(features)
         # return SimpleReconstructionOutput(reconstruction=logits)
         batch_size = image.shape[0]
-        masks = torch.ones([batch_size, 11, 196]).to(image.device)
+        ###
+        mega_dict = {}
+        with torch.inference_mode():
+            # inputs = {}
+            inputs = self.entity_net.preprocess(image)
+            # for i, (inputs, filename) in enumerate(tqdm(self.dataloader)):
+            #     if range is not None:
+            #         if i >= range[1]:
+            #             break
+            #         if i < range[0]:
+            #             continue
+            #     filename = filename[0]
+            inputs['image'], inputs['image_crop'] = inputs['image'].squeeze(0).cuda(non_blocking=True), inputs['image_crop'].squeeze(0).cuda(non_blocking=True)
+            # inputs['image'] = image.cuda()
+            # inputs['image_crop'] = inputs["image"]
+            # inputs['image'], inputs['image_crop'] = inputs['image'].squeeze(0).cuda(non_blocking=True), inputs['image_crop'].squeeze(0).cuda(non_blocking=True)
+            predictions = self.model([inputs])[0]
+            pred_masks = predictions["instances"].pred_masks
+            pred_scores = predictions["instances"].scores
+            selected_indexes = (pred_scores >= self.confidence_threshold)
+            selected_scores = pred_scores[selected_indexes]
+            selected_masks  = pred_masks[selected_indexes]
+            _, m_H, m_W = selected_masks.shape
+            mask_id = np.zeros((m_H, m_W), dtype=np.uint8)
+
+            selected_scores, ranks = torch.sort(selected_scores)
+            ranks = ranks + 1
+
+            for index in ranks:
+                mask_id[(selected_masks[index-1]==1).cpu().numpy()] = int(index)
+        # predictions = self.model([inputs])[0]
+
+        ####
+        # masks = torch.ones([batch_size, 11, 196]).to(image.device)
+        masks = mask_id
+        import sys # tmp
+        sys.exit(0) # reshape for patches
         dummy = torch.zeros([batch_size, 196, 384])
         # sort objects by sizes if > 11
 
@@ -947,11 +986,16 @@ import numpy as np
 import torch
 from detectron2.config import get_cfg
 from detectron2.projects.deeplab import add_deeplab_config
-from ocl.get_segments.utils import add_maskformer2_config
+# from ocl.get_segments.utils import add_maskformer2_config
 from tqdm import tqdm
 import ocl.get_segments.cropformer_model
 # from ocl.get_segments.tardataset import TarDataset
-from ocl.get_segments.utils import BatchResizeShortestEdge, EntityCrop, EntityCropTransform
+from ocl.get_segments.utils import (
+    BatchResizeShortestEdge,
+    EntityCrop,
+    EntityCropTransform,
+    add_maskformer2_config
+)
 import detectron2.data.transforms as T
 
 
@@ -985,12 +1029,12 @@ class EntityNetV2(DefaultPredictor):
         self.instance_mode = instance_mode
 
         # Get dataset loaded
-        augs, crop_augs = self.generate_img_augs(cfg)
+        self.augs, self.crop_augs = self.generate_img_augs(cfg)
         # dataset = TarDataset(args.input, transforms_help=[augs, crop_augs])
-        dataset = None # tmp
-        self.dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, num_workers=2, shuffle=False, collate_fn=None, pin_memory=True)
+        # dataset = None # tmp
+        # self.dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, num_workers=2, shuffle=False, collate_fn=None, pin_memory=True)
         # self.confidence_threshold = args.confidence_threshold
-        self.confidence_threshold = confidence_threshold
+        # self.confidence_threshold = confidence_threshold
 
 
     def generate_img_augs(self, cfg):
@@ -1010,6 +1054,35 @@ class EntityNetV2(DefaultPredictor):
 
         crop_augs = T.AugmentationList(crop_augs)
         return augs, crop_augs
+
+
+    def preprocess(self, image): # TODO(Alex | 13.11.2024): optimize it
+        assert image.shape[0] == 1
+        # image = image[0].to(torch.float32).cpu().numpy()
+        image = image[0].cpu().numpy()
+        image = np.asarray(image)
+        # Apply transforms to the input image.
+        image = image[:, :, ::-1]
+        height, width = image.shape[:2]
+        aug_input_ori = T.AugInput(copy.deepcopy(image))
+        aug_input_ori, _ = T.apply_transform_gens(self.augs, aug_input_ori)
+        image_ori = aug_input_ori.image
+        image_ori = torch.as_tensor(image_ori.astype("float32").transpose(2, 0, 1))
+        aug_input_crop = T.AugInput(copy.deepcopy(image))
+        transforms_crop = self.crop_augs(aug_input_crop)
+        image_crop = aug_input_crop.image
+        image_crop = torch.as_tensor(image_crop.astype("float32").transpose(0, 3, 1, 2))
+        for transform_type in transforms_crop:
+            if isinstance(transform_type, EntityCropTransform):
+                crop_axises = transform_type.crop_axises
+                crop_indexes = transform_type.crop_indexes
+        return {"image": image_ori,
+                        "height": height,
+                        "width": width,
+                        "image_crop": image_crop,
+                        "crop_region": crop_axises,
+                        "crop_indexes": crop_indexes
+                        }
 
 
     def run(self, range=None):
