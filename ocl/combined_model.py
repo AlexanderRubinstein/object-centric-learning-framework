@@ -129,6 +129,9 @@ class CombinedModel(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         batch_size = batch["batch_size"]
+        # if batch_idx > 10:
+        #     return None # tmp 2
+
         outputs = self(batch)
         total_loss, quantities_to_log = self._compute_losses(outputs, phase="val")
 

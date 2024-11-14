@@ -900,6 +900,9 @@ class EntitySegDecoder(nn.Module):
         CONFIG_FILE = "/home/oh/arubinstein17/github/densification/src/densifier/get_segments/cropformer_hornet.yaml"
         OPTS = ["MODEL.WEIGHTS", "/home/oh/arubinstein17/github/densification/models/CropFormer_hornet_3x/CropFormer_model/Entity_Segmentation/CropFormer_hornet_3x/CropFormer_hornet_3x_03823a.pth"]
         CONF_THRESHOLD = 0.5
+        # CONF_THRESHOLD = 0.25
+        # CONF_THRESHOLD = 0.75
+        # CONF_THRESHOLD = 0.60
 
         self.entity_net = EntityNetV2(
             config_file=CONFIG_FILE,
@@ -911,6 +914,8 @@ class EntitySegDecoder(nn.Module):
         # self.crop_augs = transforms_help[1]
 
     def forward(self, image):
+
+        N_OBJECTS = 11
         # logits = self.decoder(features)
         # return SimpleReconstructionOutput(reconstruction=logits)
         batch_size = image.shape[0]
@@ -930,27 +935,101 @@ class EntitySegDecoder(nn.Module):
             # inputs['image'] = image.cuda()
             # inputs['image_crop'] = inputs["image"]
             # inputs['image'], inputs['image_crop'] = inputs['image'].squeeze(0).cuda(non_blocking=True), inputs['image_crop'].squeeze(0).cuda(non_blocking=True)
-            predictions = self.model([inputs])[0]
+            predictions = self.entity_net.model([inputs])[0]
             pred_masks = predictions["instances"].pred_masks
             pred_scores = predictions["instances"].scores
-            selected_indexes = (pred_scores >= self.confidence_threshold)
+            selected_indexes = (pred_scores >= self.entity_net.confidence_threshold)
             selected_scores = pred_scores[selected_indexes]
             selected_masks  = pred_masks[selected_indexes]
             _, m_H, m_W = selected_masks.shape
+            # mask_id = np.zeros((N_OBJECTS, m_H, m_W), dtype=np.uint8)
             mask_id = np.zeros((m_H, m_W), dtype=np.uint8)
 
             selected_scores, ranks = torch.sort(selected_scores)
             ranks = ranks + 1
 
+            # for i, index in enumerate(ranks):
             for index in ranks:
                 mask_id[(selected_masks[index-1]==1).cpu().numpy()] = int(index)
         # predictions = self.model([inputs])[0]
 
-        ####
-        # masks = torch.ones([batch_size, 11, 196]).to(image.device)
-        masks = mask_id
-        import sys # tmp
-        sys.exit(0) # reshape for patches
+        # ####
+        # # masks = torch.ones([batch_size, 11, 196]).to(image.device)
+        # sums = []
+        # new_selected_masks = torch.zeros_like(selected_masks)
+        # for i in range(selected_masks.shape[0]):
+        #     sum = selected_masks[i].sum()
+        #     sums.append((i, sum))
+        # sums = sorted(sums, key=lambda x: x[1], reverse=True)
+        # for j, (i, sum) in enumerate(sums):
+        #     new_selected_masks[j] = selected_masks[i]
+        # selected_masks = new_selected_masks
+
+        # new_selected_masks = torch.zeros_like(selected_masks)
+        # masks = torch.zeros((batch_size, N_OBJECTS + 1, *selected_masks.shape[-2:])).to(image.device)
+        masks = torch.zeros((batch_size, N_OBJECTS, *selected_masks.shape[-2:])).to(image.device)
+        # selected_masks = selected_masks[:N_OBJECTS]
+
+        for i, index in enumerate(ranks):
+            if i == N_OBJECTS:
+                break
+            masks[0][i] = selected_masks[index - 1]
+        # selected_masks = new_selected_masks
+
+        # ###
+        # def get_bg_scores(masks):
+        #     size = masks.shape[-1] - 1
+        #     res = {}
+        #     max_score = -1
+        #     for i in range(masks.shape[1]):
+        #         score = 0
+        #         if masks[0][i][0, 0] == 1:
+        #             score += 1
+        #         if masks[0][i][0, size] == 1:
+        #             score += 1
+        #         if masks[0][i][size, 0] == 1:
+        #             score += 1
+        #         if masks[0][i][size, size] == 1:
+        #             score += 1
+        #         if masks[0][i][0, size // 2] == 1:
+        #             score += 1
+        #         if masks[0][i][size // 2, 0] == 1:
+        #             score += 1
+        #         if masks[0][i][size // 2, size // 2] == 1:
+        #             score += 1
+        #         if score > max_score:
+        #             max_score = score
+        #             max_i = i
+        #         res[i] = score
+        #     return res, max_score, i
+
+        # # masks = torch.zeros((batch_size, N_OBJECTS, *selected_masks.shape[-2:])).to(image.device)
+        # # masks[0, 0:selected_masks.shape[0], ...] = selected_masks
+
+
+        # bg_scores, bg_score, bg_i = get_bg_scores(masks)
+
+        # if bg_score > 2:
+        #     ### put bg at 0
+        #     bg = masks[0, bg_i].clone()
+        #     masks[0, bg_i] = masks[0, 0]
+        #     masks[0, 0] = bg
+        #     ###
+
+        #     ### remove bg
+        #     new_masks = torch.zeros((batch_size, N_OBJECTS, *selected_masks.shape[-2:])).to(image.device)
+        #     new_masks[0, 0:N_OBJECTS] = masks[0, 1:N_OBJECTS + 1]
+        #     masks = new_masks
+        #     ###
+
+        # else:
+        #     masks = masks[:, 0:N_OBJECTS]
+
+        masks = masks.view(batch_size, N_OBJECTS, -1)
+        # import sys # tmp
+        # sys.exit(0) # reshape for patches
+        # n_channels = patches.shape[-2]
+    # n_patches = patches.shape[-1]
         dummy = torch.zeros([batch_size, 196, 384])
         # sort objects by sizes if > 11
 
@@ -1034,7 +1113,7 @@ class EntityNetV2(DefaultPredictor):
         # dataset = None # tmp
         # self.dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, num_workers=2, shuffle=False, collate_fn=None, pin_memory=True)
         # self.confidence_threshold = args.confidence_threshold
-        # self.confidence_threshold = confidence_threshold
+        self.confidence_threshold = confidence_threshold
 
 
     def generate_img_augs(self, cfg):

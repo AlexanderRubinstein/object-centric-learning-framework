@@ -37,6 +37,7 @@ class EvaluationConfig:
 
     # Path to training configuration file or configuration dir. If dir, train_config_name
     # needs to be set as well.
+
     # train_config_path: str = "/home/oh/arubinstein17/github/object-centric-learning-framework/configs/experiment/projects/bridging/dinosaur/movi_c_feat_rec_auto_for_eval.yaml"
     train_config_path: str = "/home/oh/arubinstein17/github/object-centric-learning-framework/configs/experiment/projects/bridging/dinosaur/movi_c_entity_seg.yaml"
 
