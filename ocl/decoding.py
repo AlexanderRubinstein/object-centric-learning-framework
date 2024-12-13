@@ -913,9 +913,10 @@ class EntitySegDecoder(nn.Module):
         # self.augs = transforms_help[0]
         # self.crop_augs = transforms_help[1]
 
-    def forward(self, image):
+    def forward(self, image, mask_shape):
 
-        N_OBJECTS = 11
+        # N_OBJECTS = 11
+        n_objects = mask_shape[1]
         # logits = self.decoder(features)
         # return SimpleReconstructionOutput(reconstruction=logits)
         batch_size = image.shape[0]
@@ -967,11 +968,11 @@ class EntitySegDecoder(nn.Module):
 
         # new_selected_masks = torch.zeros_like(selected_masks)
         # masks = torch.zeros((batch_size, N_OBJECTS + 1, *selected_masks.shape[-2:])).to(image.device)
-        masks = torch.zeros((batch_size, N_OBJECTS, *selected_masks.shape[-2:])).to(image.device)
+        masks = torch.zeros((batch_size, n_objects, *selected_masks.shape[-2:])).to(image.device)
         # selected_masks = selected_masks[:N_OBJECTS]
 
         for i, index in enumerate(ranks):
-            if i == N_OBJECTS:
+            if i == n_objects:
                 break
             masks[0][i] = selected_masks[index - 1]
         # selected_masks = new_selected_masks
@@ -1025,7 +1026,7 @@ class EntitySegDecoder(nn.Module):
         # else:
         #     masks = masks[:, 0:N_OBJECTS]
 
-        masks = masks.view(batch_size, N_OBJECTS, -1)
+        masks = masks.view(batch_size, n_objects, -1)
         # import sys # tmp
         # sys.exit(0) # reshape for patches
         # n_channels = patches.shape[-2]

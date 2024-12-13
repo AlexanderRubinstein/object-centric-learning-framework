@@ -74,8 +74,11 @@ models:
   # EntitySeg
   object_decoder:
     _target_: routed.ocl.decoding.EntitySegDecoder
-    checkpoint_path: "/home/oh/arubinstein17/github/object-centric-learning-framework/outputs/projects/bridging/dinosaur/movi_c_feat_rec_auto/2024-11-11_19-32-13/lightning_logs/version_0/checkpoints/epoch=0-step=100.ckpt"
+    # need checkpoint path because it is part of template
+    # checkpoint_path: "/home/oh/arubinstein17/github/object-centric-learning-framework/outputs/projects/bridging/dinosaur/movi_c_feat_rec_auto/2024-11-11_19-32-13/lightning_logs/version_0/checkpoints/epoch=0-step=100.ckpt"
     image_path: input.image
+    checkpoint_path: null
+    mask_shape_path: input.mask.shape
 
   masks_as_image:
     _target_: routed.ocl.utils.resizing.Resize
